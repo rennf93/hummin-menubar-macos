@@ -9,66 +9,78 @@ enum BirdDesign {
     static let designWidth: CGFloat = 100
     static let designHeight: CGFloat = 75
 
+    // Design space is y-UP (the CG context is y-up): beak on the LEFT at mid
+    // height, crown ABOVE the beak, wing sweeping up-right, tail down-right.
     static func bodyPath() -> NSBezierPath {
         let p = NSBezierPath()
         // needle beak: tip, top edge into the forehead
-        p.move(to: NSPoint(x: 96, y: 34.8))
-        p.line(to: NSPoint(x: 72, y: 37.2))
-        // pronounced crown dome
-        p.curve(to: NSPoint(x: 56, y: 33),
-                controlPoint1: NSPoint(x: 68, y: 44),
-                controlPoint2: NSPoint(x: 61, y: 40))
-        // back flowing down-left
-        p.curve(to: NSPoint(x: 35, y: 47),
-                controlPoint1: NSPoint(x: 48, y: 36),
-                controlPoint2: NSPoint(x: 40, y: 41))
-        // tail: upper feather to the far tip
-        p.curve(to: NSPoint(x: 7, y: 68),
-                controlPoint1: NSPoint(x: 28, y: 53),
-                controlPoint2: NSPoint(x: 15, y: 60))
-        // fork notch between the two tail feathers (shallow, stays clean at size)
-        p.curve(to: NSPoint(x: 23, y: 64),
-                controlPoint1: NSPoint(x: 15, y: 65),
-                controlPoint2: NSPoint(x: 19, y: 64.5))
-        // lower tail feather, shorter and steeper
-        p.curve(to: NSPoint(x: 14, y: 74),
-                controlPoint1: NSPoint(x: 25, y: 67),
-                controlPoint2: NSPoint(x: 18, y: 72))
-        // back to the body underside
-        p.curve(to: NSPoint(x: 32, y: 57),
-                controlPoint1: NSPoint(x: 18, y: 72),
-                controlPoint2: NSPoint(x: 26, y: 64))
-        // belly toward the chest
-        p.curve(to: NSPoint(x: 62, y: 50),
-                controlPoint1: NSPoint(x: 43, y: 62),
-                controlPoint2: NSPoint(x: 55, y: 57))
-        // throat with a small chin notch, then the beak underside
-        p.curve(to: NSPoint(x: 66, y: 42),
-                controlPoint1: NSPoint(x: 65, y: 48),
-                controlPoint2: NSPoint(x: 68, y: 45))
-        p.line(to: NSPoint(x: 96, y: 33.2))
+        p.move(to: NSPoint(x: 3, y: 40))
+        p.line(to: NSPoint(x: 28, y: 43))
+        // crown dome: the head is the highest point of the whole bird
+        p.curve(to: NSPoint(x: 47, y: 45),
+                controlPoint1: NSPoint(x: 32, y: 53),
+                controlPoint2: NSPoint(x: 42, y: 55))
+        // back of the head with a slight dip, then the back slopes to the tail
+        p.curve(to: NSPoint(x: 53, y: 46),
+                controlPoint1: NSPoint(x: 51, y: 43),
+                controlPoint2: NSPoint(x: 52, y: 44))
+        p.curve(to: NSPoint(x: 68, y: 28),
+                controlPoint1: NSPoint(x: 58, y: 37),
+                controlPoint2: NSPoint(x: 65, y: 32))
+        // tail: upper feather
+        p.curve(to: NSPoint(x: 94, y: 15),
+                controlPoint1: NSPoint(x: 76, y: 26),
+                controlPoint2: NSPoint(x: 88, y: 19))
+        // fork notch between the feathers
+        p.curve(to: NSPoint(x: 81, y: 17),
+                controlPoint1: NSPoint(x: 89, y: 13.5),
+                controlPoint2: NSPoint(x: 84, y: 15))
+        // lower tail feather
+        p.curve(to: NSPoint(x: 88, y: 5),
+                controlPoint1: NSPoint(x: 77, y: 11),
+                controlPoint2: NSPoint(x: 84, y: 7.5))
+        // underside back to the belly
+        p.curve(to: NSPoint(x: 68, y: 24),
+                controlPoint1: NSPoint(x: 84, y: 3),
+                controlPoint2: NSPoint(x: 75, y: 12))
+        // belly and chest rising toward the chin
+        p.curve(to: NSPoint(x: 37, y: 35),
+                controlPoint1: NSPoint(x: 56, y: 17),
+                controlPoint2: NSPoint(x: 43, y: 24))
+        // rounded chin under the beak
+        p.curve(to: NSPoint(x: 30, y: 37),
+                controlPoint1: NSPoint(x: 33, y: 34),
+                controlPoint2: NSPoint(x: 31, y: 35.5))
         p.close()
         return p
     }
 
     static func wingPath() -> NSBezierPath {
         let p = NSBezierPath()
-        // shoulder, leading edge sweeping up-left to the tip
-        p.move(to: NSPoint(x: 57, y: 33))
-        p.curve(to: NSPoint(x: 20, y: 3),
-                controlPoint1: NSPoint(x: 46, y: 19),
-                controlPoint2: NSPoint(x: 30, y: 6))
+        // shoulder, leading edge sweeping up-right to the tip
+        p.move(to: NSPoint(x: 52, y: 44))
+        p.curve(to: NSPoint(x: 83, y: 64),
+                controlPoint1: NSPoint(x: 63, y: 51),
+                controlPoint2: NSPoint(x: 76, y: 60))
         // slim rounded tip
-        p.curve(to: NSPoint(x: 28, y: 10),
-                controlPoint1: NSPoint(x: 17, y: 5),
-                controlPoint2: NSPoint(x: 22, y: 8))
-        // concave trailing edge back down to the shoulder, gap stays visible
-        p.curve(to: NSPoint(x: 46, y: 30),
-                controlPoint1: NSPoint(x: 32, y: 18),
-                controlPoint2: NSPoint(x: 40, y: 26))
+        p.curve(to: NSPoint(x: 76, y: 57),
+                controlPoint1: NSPoint(x: 81, y: 62),
+                controlPoint2: NSPoint(x: 78, y: 60))
+        // concave trailing edge back down, bold gap to the back
+        p.curve(to: NSPoint(x: 63, y: 47),
+                controlPoint1: NSPoint(x: 72, y: 56),
+                controlPoint2: NSPoint(x: 66, y: 51))
         p.close()
         return p
     }
+}
+
+// Menubar-ready template image (the system recolors it for light/dark mode).
+func templateBirdImage() -> NSImage {
+    let img = birdImage(33)
+    img.size = NSSize(width: 22, height: 16.5)
+    img.isTemplate = true
+    return img
 }
 
 // Renders the black bird at the requested pixel height on transparency.
@@ -78,20 +90,11 @@ func birdImage(_ pixelHeight: CGFloat) -> NSImage {
     let img = NSImage(size: NSSize(width: w, height: h), flipped: false) { rect in
         NSColor.black.setFill()
         NSGraphicsContext.current?.cgContext.saveGState()
-        NSGraphicsContext.current?.cgContext.translateBy(x: 0, y: rect.height)
-        NSGraphicsContext.current?.cgContext.scaleBy(x: rect.width / BirdDesign.designWidth, y: -rect.height / BirdDesign.designHeight)
+        NSGraphicsContext.current?.cgContext.scaleBy(x: rect.width / BirdDesign.designWidth, y: rect.height / BirdDesign.designHeight)
         BirdDesign.bodyPath().fill()
         BirdDesign.wingPath().fill()
         NSGraphicsContext.current?.cgContext.restoreGState()
         return true
     }
-    return img
-}
-
-// Menubar-ready template image (the system recolors it for light/dark mode).
-func templateBirdImage() -> NSImage {
-    let img = birdImage(33)
-    img.size = NSSize(width: 22, height: 16.5)
-    img.isTemplate = true
     return img
 }

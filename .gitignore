@@ -60,3 +60,7 @@ fastlane/report.xml
 fastlane/Preview.html
 fastlane/screenshots/**/*.png
 fastlane/test_output
+
+# personal fleet config (hostnames + shell commands): keep out of public repos
+servers.json
+.DS_Store

@@ -4,10 +4,25 @@ import AppKit
 // reference art (see scripts/extract-template.py). Rendered as a macOS
 // template image so the system recolors it for light/dark mode.
 // Falls back to the geometric vector bird if the bundled asset is missing.
+// NOTE: SPM's Bundle.module accessor TRAPS (uncatchable crash) when the
+// resource bundle is missing, so the bundle is located manually here.
 
 enum BirdIcon {
+    static func resourceBundle() -> Bundle? {
+        var candidates: [URL] = []
+        if let resourceURL = Bundle.main.resourceURL { candidates.append(resourceURL) }
+        if let exeDir = Bundle.main.executableURL?.deletingLastPathComponent() { candidates.append(exeDir) }
+        for dir in candidates {
+            if let bundle = Bundle(url: dir.appendingPathComponent("HumminMenubar_HumminMenubar.bundle")) {
+                return bundle
+            }
+        }
+        return nil
+    }
+
     static func statusBarIcon() -> NSImage {
-        if let url = Bundle.module.url(forResource: "menubar-template", withExtension: "png", subdirectory: "Resources"),
+        if let bundle = resourceBundle(),
+           let url = bundle.url(forResource: "menubar-template", withExtension: "png", subdirectory: "Resources"),
            let art = NSImage(contentsOf: url) {
             let aspect = art.size.width / max(art.size.height, 1)
             let img = NSImage(size: NSSize(width: 20, height: 20 / max(aspect, 0.1)), flipped: false) { rect in
@@ -17,7 +32,7 @@ enum BirdIcon {
             img.isTemplate = true
             return img
         }
-        // fallback: geometric vector bird
+        // fallback: geometric vector bird (used when assets are not installed)
         let img = birdImage(33)
         img.size = NSSize(width: 22, height: 16.5)
         img.isTemplate = true

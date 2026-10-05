@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "HumminMenubar",
-            path: "Sources/HumminMenubar"
+            path: "Sources/HumminMenubar",
+            resources: [.copy("Resources")]
         )
     ]
 )

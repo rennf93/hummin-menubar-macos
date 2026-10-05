@@ -40,7 +40,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ _: Notification) {
         let menu = NSMenu()
         menu.autoenablesItems = false
-        statusItem.button?.image = templateBirdImage()
+        statusItem.button?.image = BirdIcon.statusBarIcon()
 
         let status = NSMenuItem(title: "Status: checking...", action: nil, keyEquivalent: "")
         menu.addItem(status)

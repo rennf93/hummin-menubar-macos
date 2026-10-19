@@ -246,7 +246,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "start": command = server.up
             default: command = "\(server.down); sleep 2; \(server.up)"
             }
-            let exited = Process.runLogged("/bin/zsh", ["-lc", command])
+            let exited = Process.runLogged("/bin/zsh", ["-lc", command], timeout: 25)
             self.logAction("\(server.id) \(action) exit=\(exited) cmd=\(command)")
         }
     }

@@ -1,305 +1,147 @@
 import AppKit
+import FleetCore
+import SwiftUI
 
-final class MenuDelegateRef: NSObject, NSMenuDelegate {
-    let onUpdate: () -> Void
-    init(onUpdate: @escaping () -> Void) { self.onUpdate = onUpdate }
-    func menuWillOpen(_ _: NSMenu) { onUpdate() }
-}
-
-final class AppDelegate: NSObject, NSApplicationDelegate {
+@MainActor
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-    let servers: [Server]       // sorted: hostOrder first, label alphabetically within a host
-    let hostOrder: [String]
-    let configError: String?
+    let store: FleetStore
+    private var window: NSWindow?
 
-    var statusLine: NSMenuItem?
-    var menuDelegate: MenuDelegateRef?
-    var hostItems: [String: NSMenuItem] = [:]
-    var serverRows: [String: NSMenuItem] = [:]
-    var serverButtons: [String: (start: NSMenuItem, stop: NSMenuItem, restart: NSMenuItem)] = [:]
-    var modeMenus: [String: (parent: NSMenuItem, items: [String: NSMenuItem])] = [:]
-    var pending: [String: String] = [:]
-    let pendingLock = NSLock()
-
-    // Health cache: the menu renders instantly from this, checks run in the
-    // background, and results land on the next render. Checks are skipped
-    // within the TTL so menuWillOpen + action callbacks never stack up.
-    private var cachedUp: [String: Bool] = [:]
-    private var cachedModes: [String: String] = [:]
-    private var lastCheck: Date?
-    private var checking = false
-    private let checkTTL: TimeInterval = 5
-
-    init(servers: [Server], hostOrder: [String], configError: String?) {
-        self.servers = servers
-        self.hostOrder = hostOrder
-        self.configError = configError
+    init(store: FleetStore) {
+        self.store = store
         super.init()
     }
 
     func applicationDidFinishLaunching(_ _: Notification) {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        statusItem.button?.image = BirdIcon.statusBarIcon()
-
-        let status = NSMenuItem(title: "Status: checking...", action: nil, keyEquivalent: "")
-        menu.addItem(status)
-        statusLine = status
-
-        if let error = configError {
-            // Still fully usable as a menu (Quit works); the error row explains
-            // what is missing without popping a dialog at login.
-            let err = NSMenuItem(title: "Config error (see log)", action: nil, keyEquivalent: "")
-            err.isEnabled = false
-            menu.addItem(err)
-            statusLine?.title = "Config error (see log)"
-            log(error)
+        NSApp.setActivationPolicy(.accessory)
+        installMainMenu()
+        if let button = statusItem.button {
+            button.image = BirdIcon.statusBarIcon()
+            button.target = self
+            button.action = #selector(statusClicked)
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
-
-        // One top-level item per host; hovering it reveals the host's model
-        // rows, and each row keeps its usual Start/Stop/Restart submenu.
-        for host in hostOrder {
-            let hostItem = NSMenuItem(title: host, action: nil, keyEquivalent: "")
-            let hostMenu = NSMenu()
-            hostMenu.autoenablesItems = false
-            for server in servers where server.host == host {
-                let row = NSMenuItem(title: "\(server.label)\(portSuffix(server))", action: nil, keyEquivalent: "")
-                let sub = NSMenu()
-                sub.autoenablesItems = false
-                let start = NSMenuItem(title: "Start", action: #selector(upObj(_:)), keyEquivalent: "")
-                let stop = NSMenuItem(title: "Stop", action: #selector(downObj(_:)), keyEquivalent: "")
-                let restart = NSMenuItem(title: "Restart", action: #selector(restartObj(_:)), keyEquivalent: "")
-                for item in [start, stop, restart] {
-                    item.target = self
-                    item.representedObject = server
-                    sub.addItem(item)
-                }
-                if let modes = server.modes {
-                    let modeItem = NSMenuItem(title: "Mode", action: nil, keyEquivalent: "")
-                    let modeMenu = NSMenu()
-                    modeMenu.autoenablesItems = false
-                    var items = [String: NSMenuItem]()
-                    for m in modes {
-                        let mi = NSMenuItem(title: m, action: #selector(modeObj(_:)), keyEquivalent: "")
-                        mi.target = self
-                        mi.representedObject = ["server": server, "mode": m]
-                        modeMenu.addItem(mi)
-                        items[m] = mi
-                    }
-                    modeItem.submenu = modeMenu
-                    sub.addItem(modeItem)
-                    modeMenus[server.id] = (modeItem, items)
-                }
-                row.submenu = sub
-                hostMenu.addItem(row)
-                serverRows[server.id] = row
-                serverButtons[server.id] = (start, stop, restart)
-            }
-            hostItem.submenu = hostMenu
-            menu.addItem(hostItem)
-            hostItems[host] = hostItem
-        }
-
-        menu.addItem(.separator())
-        let quit = NSMenuItem(title: "Quit menubar", action: #selector(quit), keyEquivalent: "q")
-        quit.target = self
-        menu.addItem(quit)
-
-        menuDelegate = MenuDelegateRef { [weak self] in
-            self?.render()
-            self?.scheduleCheck(force: false)
-        }
-        menu.delegate = menuDelegate
-        statusItem.menu = menu
-        render()
-        scheduleCheck(force: true)
+        if let error = store.configError { log(error) }
+        store.refresh(force: true) // once at launch; polling only runs while the window is visible
     }
 
-    func portSuffix(_ server: Server) -> String {
-        server.port.map { " :\($0)" } ?? ""
-    }
+    // ---- status item ---------------------------------------------------------------
 
-    // ---- rendering (main thread, instant, cache-driven) -----------------------
-
-    func render() {
-        var upCount = 0
-        var hostUp = [String: Int]()
-        pendingLock.lock()
-        let pendingNow = pending
-        pendingLock.unlock()
-
-        for server in servers {
-            let up = cachedUp[server.id] ?? false
-            if up {
-                upCount += 1
-                hostUp[server.host, default: 0] += 1
-            }
-            let state = pendingNow[server.id]
-            let mark = state != nil ? "  ◐" : (up ? "  ●" : "  ○")
-            let suffix = state.map { "  \($0)ing..." } ?? ""
-            let mode = cachedModes[server.id]
-            let modeText = mode.map { " ·\($0)" } ?? ""
-            serverRows[server.id]?.title = "\(server.label)\(portSuffix(server))\(modeText)\(mark)\(suffix)"
-
-            // Button states reflect the transition: while starting or
-            // restarting, Start/Restart are disabled and Stop stays live
-            // (an abort lever); while stopping everything is disabled.
-            if let b = serverButtons[server.id] {
-                switch state {
-                case "start":
-                    b.start.isEnabled = false; b.stop.isEnabled = true; b.restart.isEnabled = false
-                case "stop":
-                    b.start.isEnabled = false; b.stop.isEnabled = false; b.restart.isEnabled = false
-                case "restart":
-                    b.start.isEnabled = false; b.stop.isEnabled = true; b.restart.isEnabled = false
-                default:
-                    b.start.isEnabled = !up
-                    b.stop.isEnabled = up
-                    b.restart.isEnabled = up
-                }
-            }
-            if let mm = modeMenus[server.id] {
-                for (m, mi) in mm.items { mi.state = m == mode ? .on : .off }
-            }
-        }
-        for host in hostOrder {
-            let n = hostUp[host] ?? 0
-            hostItems[host]?.title = n > 0 ? "\(host)  (\(n) running)" : host
-        }
-        if statusLine?.title == "Status: checking..." || cachedUp.isEmpty {
-            // keep the initial line until the first real check has landed
+    @objc private func statusClicked() {
+        let event = NSApp.currentEvent
+        if event?.type == .rightMouseUp || event?.modifierFlags.contains(.control) == true {
+            let menu = NSMenu()
+            menu.addItem(withTitle: "Open Hummin", action: #selector(openWindow), keyEquivalent: "").target = self
+            let refresh = menu.addItem(withTitle: "Refresh All", action: #selector(refreshAll), keyEquivalent: "r")
+            refresh.target = self
+            menu.addItem(.separator())
+            menu.addItem(withTitle: "Quit Hummin Menubar", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+            statusItem.menu = menu
+            statusItem.button?.performClick(nil)
+            statusItem.menu = nil
         } else {
-            statusLine?.title = upCount == 0 ? "All servers stopped" : "\(upCount) server(s) running"
+            toggleWindow()
         }
     }
 
-    // ---- checking (background, TTL-guarded) -----------------------------------
+    @objc private func openWindow() { showWindow() }
+    @objc private func refreshAll() { store.refresh(force: true) }
 
-    func scheduleCheck(force: Bool) {
-        guard !checking else { return }
-        if !force, let t = lastCheck, Date().timeIntervalSince(t) < checkTTL { return }
-        checking = true
-        DispatchQueue.global(qos: .userInitiated).async {
-            let group = DispatchGroup()
-            let queue = DispatchQueue(label: "health", attributes: .concurrent)
-            var results = [String: Bool]()
-            var modeResults = [String: String]()
-            let lock = NSLock()
-            for server in self.servers {
-                group.enter()
-                queue.async {
-                    let exit = Process.runLogged("/bin/zsh", ["-lc", server.health])
-                    lock.lock(); results[server.id] = (exit == 0); lock.unlock()
-                    group.leave()
-                }
-                if let modeGet = server.modeGet {
-                    group.enter()
-                    queue.async {
-                        let r = Process.runCaptured("/bin/zsh", ["-lc", modeGet])
-                        let mode = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
-                        lock.lock()
-                        if r.exit == 0 { modeResults[server.id] = mode }
-                        lock.unlock()
-                        group.leave()
-                    }
-                }
-            }
-            _ = group.wait(timeout: .now() + 5)
-            DispatchQueue.main.async {
-                self.cachedUp = results
-                self.cachedModes = modeResults
-                self.lastCheck = Date()
-                self.checking = false
-                self.render()
-            }
-        }
+    private func toggleWindow() {
+        if let w = window, w.isVisible, w.isKeyWindow { w.close() } else { showWindow() }
     }
 
-    // ---- actions ---------------------------------------------------------------
+    // ---- window ----------------------------------------------------------------------
 
-    func act(_ server: Server, _ action: String) {
-        pendingLock.lock()
-        if pending[server.id] != nil { pendingLock.unlock(); return }
-        pending[server.id] = action
-        pendingLock.unlock()
-        render()
+    private func makeWindow() -> NSWindow {
+        let hosting = NSHostingController(rootView: FleetView(store: store, onClose: { [weak self] in self?.window?.close() }))
+        hosting.sizingOptions = []
+        let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 700),
+                         styleMask: [.titled, .closable, .miniaturizable, .resizable],
+                         backing: .buffered, defer: false)
+        w.contentViewController = hosting
+        w.title = "Hummin"
+        w.toolbarStyle = .unified
+        w.isReleasedWhenClosed = false
+        w.setContentSize(NSSize(width: 560, height: 700))
+        w.contentMinSize = NSSize(width: 460, height: 420)
+        w.center()
+        w.setFrameAutosaveName("HumminFleetWindow")
+        w.delegate = self
+        return w
+    }
 
-        DispatchQueue.global().async {
-            defer {
-                self.pendingLock.lock()
-                self.pending[server.id] = nil
-                self.pendingLock.unlock()
-                DispatchQueue.main.async { self.scheduleCheck(force: true) }
-            }
-            if action == "start" || action == "restart" {
-                // Resource-sharers are exclusive: stop the others in the group first.
-                if let group = server.mutexGroup {
-                    for other in self.servers where other.id != server.id && other.mutexGroup == group {
-                        Process.run("/bin/zsh", ["-lc", other.down], wait: true)
-                    }
-                    Thread.sleep(forTimeInterval: 2)
-                }
-            }
-            let command: String
-            switch action {
-            case "stop": command = server.down
-            case "start": command = server.up
-            default: command = "\(server.down); sleep 2; \(server.up)"
-            }
-            let exited = Process.runLogged("/bin/zsh", ["-lc", command], timeout: 25)
-            self.logAction("\(server.id) \(action) exit=\(exited) cmd=\(command)")
+    private func showWindow() {
+        let w = window ?? makeWindow()
+        window = w
+        w.makeKeyAndOrderFront(nil)
+        NSApp.activate()
+        store.startPolling()
+    }
+
+    func windowDidChangeOcclusionState(_ _: Notification) {
+        guard let w = window else { return }
+        if w.occlusionState.contains(.visible) { store.startPolling() } else { store.stopPolling() }
+    }
+
+    func windowWillClose(_ _: Notification) { store.stopPolling() }
+
+    // ---- main menu (key equivalents in an accessory app) ------------------------------------
+
+    private func installMainMenu() {
+        let main = NSMenu()
+        func submenu(_ title: String, _ items: [NSMenuItem]) {
+            let item = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+            let menu = NSMenu(title: title)
+            items.forEach(menu.addItem)
+            item.submenu = menu
+            main.addItem(item)
         }
+        func mi(_ title: String, _ sel: Selector, _ key: String, _ mods: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+            let i = NSMenuItem(title: title, action: sel, keyEquivalent: key)
+            i.keyEquivalentModifierMask = mods
+            return i
+        }
+        submenu("Hummin", [mi("Quit Hummin Menubar", #selector(NSApplication.terminate(_:)), "q")])
+        submenu("Edit", [
+            mi("Undo", Selector(("undo:")), "z"),
+            mi("Redo", Selector(("redo:")), "z", [.command, .shift]),
+            .separator(),
+            mi("Cut", #selector(NSText.cut(_:)), "x"),
+            mi("Copy", #selector(NSText.copy(_:)), "c"),
+            mi("Paste", #selector(NSText.paste(_:)), "v"),
+            mi("Select All", #selector(NSText.selectAll(_:)), "a"),
+        ])
+        submenu("Window", [
+            mi("Close", #selector(NSWindow.performClose(_:)), "w"),
+            mi("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"),
+        ])
+        NSApp.mainMenu = main
     }
 
     private func log(_ line: String) {
         Process.appendToLog(Config.logsDirectory + "/hummin-menubar.log", "[\(Int(Date().timeIntervalSince1970))] \(line)\n")
     }
-
-    private func logAction(_ line: String) {
-        let f = DateFormatter()
-        f.dateFormat = "HH:mm:ss"
-        Process.appendToLog(Config.logsDirectory + "/hummin-menubar-actions.log", "[\(f.string(from: Date()))] \(line)\n")
-    }
-
-    @objc func upObj(_ sender: NSMenuItem) { act(sender.representedObject as! Server, "start") }
-    @objc func downObj(_ sender: NSMenuItem) { act(sender.representedObject as! Server, "stop") }
-    @objc func restartObj(_ sender: NSMenuItem) { act(sender.representedObject as! Server, "restart") }
-    @objc func modeObj(_ sender: NSMenuItem) {
-        guard let info = sender.representedObject as? [String: Any],
-            let server = info["server"] as? Server,
-            let mode = info["mode"] as? String,
-            let template = server.modeSet else { return }
-        let command = template.replacingOccurrences(of: "{mode}", with: mode)
-        logAction("\(server.id) mode=\(mode) cmd=\(command)")
-        DispatchQueue.global().async {
-            Process.runLogged("/bin/zsh", ["-lc", command])
-            DispatchQueue.main.async { self.scheduleCheck(force: true) }
-        }
-    }
-    @objc func quit() { NSApp.terminate(nil) }
 }
 
 // ---- entry -----------------------------------------------------------------
 
-let (loadedServers, loadedHostOrder, configError): ([Server], [String], String?) = {
+let (loadedServers, loadedHostOrder, loadedPath, configError): ([Server], [String], String?, String?) = {
     switch Config.load() {
     case .success(let (config, path)):
-        let order = config.hostOrder
-        let sorted = config.servers.sorted { a, b in
-            let ah = order.firstIndex(of: a.host) ?? order.count
-            let bh = order.firstIndex(of: b.host) ?? order.count
-            if ah != bh { return ah < bh }
-            return a.label.localizedCaseInsensitiveCompare(b.label) == .orderedAscending
-        }
         Process.appendToLog(Config.logsDirectory + "/hummin-menubar.log",
             "[\(Int(Date().timeIntervalSince1970))] loaded \(config.servers.count) servers from \(path)\n")
-        return (sorted, order, nil)
+        return (sortedServers(config), config.hostOrder, path, nil)
     case .failure(let error):
-        return ([], [], error.localizedDescription)
+        return ([], [], nil, error.localizedDescription)
     }
 }()
 
-let app = NSApplication.shared
-let delegate = AppDelegate(servers: loadedServers, hostOrder: loadedHostOrder, configError: configError)
-app.delegate = delegate
-app.run()
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let delegate = AppDelegate(store: FleetStore(servers: loadedServers, hostOrder: loadedHostOrder,
+                                                 configPath: loadedPath, configError: configError, runner: ZshRunner()))
+    app.delegate = delegate
+    app.run() // delegate stays alive: run() never returns
+}

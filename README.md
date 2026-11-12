@@ -79,8 +79,12 @@ Config search order: `$HUMMIN_MENUBAR_CONFIG`, then
 .build/release/HumminMenubar
 ```
 
-For always-on use, a LaunchAgent is the usual setup. Example plist (adjust
-paths, then `launchctl bootstrap gui/501 <plist>`):
+For always-on use, a LaunchAgent is the usual setup. `make install` copies the
+build to `~/colibri/bin` and reloads the agent with `bootout` + `bootstrap`
+(not `kickstart`: macOS pins a LaunchAgent to its binary's code identity, and
+restarting it on a new binary is killed with "Launch Constraint Violation"
+until the agent is re-registered). Example plist (adjust paths, then
+`launchctl bootstrap gui/501 <plist>`):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>

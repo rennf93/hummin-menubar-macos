@@ -19,10 +19,14 @@ specified in [DESIGN.md](DESIGN.md).
   collapse and remember their state, each with a running count. Every server
   row shows a state dot plus a word (running, stopped, starting..., no
   response), its port and mode, and only the actions that apply right now
+- Crafted controls and motion: icon buttons that press and spring back,
+  hover fills, a flipping chevron tile, and cards that grow and fade their
+  rows in (expand, collapse and search filtering all animate). Reduce Motion
+  turns the movement off and keeps short fades
 - A filter field (Cmd-F) that searches label, id, host and port across the
   whole fleet; Cmd-R refreshes; Esc clears the filter, then closes
 - Failures stay visible: a failed or timed-out action shows on its row with a
-  link to the action log, instead of only in the log file
+  Show Log button, instead of only in the log file
 - Config-driven: servers live in a personal `servers.json`, not in code. Adding
   a model or a machine never means recompiling
 - Mutex groups for servers that share a resource: starting one stops the

@@ -6,10 +6,10 @@
 // Usage (top-level code must live in a file named main.swift):
 //   tmp=$(mktemp -d)
 //   cp Sources/FleetCore/{Config,Process,FleetModel}.swift $tmp/
-//   cp Sources/HumminMenubar/{FleetStore,FleetWindow}.swift $tmp/
+//   cp Sources/HumminMenubar/{FleetStore,FleetWindow,Controls}.swift $tmp/
 //   cp scripts/preview-window.swift $tmp/main.swift
 //   swiftc -O $tmp/*.swift -o $tmp/preview
-//   $tmp/preview outdir      # writes window-light.png, window-dark.png, window-search.png
+//   $tmp/preview outdir      # writes window-{light,dark,search}.png and {expand,collapse,search}-0..6.png
 import AppKit
 import SwiftUI
 
@@ -58,9 +58,8 @@ MainActor.assumeIsolated {
     store.refresh(force: true)
     RunLoop.main.run(until: Date().addingTimeInterval(2.5))
 
-    @MainActor func capture(dark: Bool, query: String, file: String) {
-        store.query = query
-        let host = NSHostingView(rootView: FleetView(store: store).background(Color(nsColor: .windowBackgroundColor)))
+    @MainActor func makeWindow(dark: Bool) -> (NSWindow, NSHostingView<AnyView>) {
+        let host = NSHostingView(rootView: AnyView(FleetView(store: store).background(Color(nsColor: .windowBackgroundColor))))
         let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 700),
                            styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         win.appearance = NSAppearance(named: dark ? .darkAqua : .aqua)
@@ -68,14 +67,49 @@ MainActor.assumeIsolated {
         win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
         RunLoop.main.run(until: Date().addingTimeInterval(1.0))
+        return (win, host)
+    }
+    @MainActor func snapshot(_ host: NSHostingView<AnyView>) -> Data {
         host.layoutSubtreeIfNeeded()
         let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds)!
         host.cacheDisplay(in: host.bounds, to: rep)
-        try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: outDir + "/" + file))
+        return rep.representation(using: .png, properties: [:]) ?? Data()
+    }
+    @MainActor func capture(dark: Bool, query: String, file: String) {
+        store.query = query
+        let (win, host) = makeWindow(dark: dark)
+        try? snapshot(host).write(to: URL(fileURLWithPath: outDir + "/" + file))
         win.orderOut(nil)
     }
     capture(dark: false, query: "", file: "window-light.png")
     capture(dark: true, query: "", file: "window-dark.png")
     capture(dark: false, query: "99", file: "window-search.png")
+
+    // Filmstrips: set the starting state, apply one animated change, capture at fixed offsets.
+    @MainActor func filmstrip(_ name: String, start: Set<String>, query: String, change: () -> Void) {
+        store.query = query
+        store.expandedHosts = start
+        let (win, host) = makeWindow(dark: false)
+        let t0 = Date()
+        change()
+        var frames: [Data] = []
+        for (i, ms) in [0, 40, 80, 125, 170, 250, 400].enumerated() {
+            RunLoop.main.run(until: t0.addingTimeInterval(Double(ms) / 1000))
+            let data = snapshot(host)
+            frames.append(data)
+            try? data.write(to: URL(fileURLWithPath: outDir + "/\(name)-\(i).png"))
+            print("\(name)-\(i): target \(ms) ms, actual \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+        }
+        win.orderOut(nil)
+        if frames[1...5].allSatisfy({ $0 == frames[0] || $0 == frames[6] }) {
+            print("\(name) filmstrip NOT valid: capture does not reflect in-flight animation state")
+        } else {
+            print("\(name) filmstrip ok: \(Set(frames).count) distinct frames of 7")
+        }
+    }
+    filmstrip("expand", start: ["Laptop", "NAS"], query: "") { withAnimation(Motion.disclosure) { _ = store.expandedHosts.insert("Mac") } }
+    filmstrip("collapse", start: ["Mac", "Laptop", "NAS"], query: "") { withAnimation(Motion.disclosure) { _ = store.expandedHosts.remove("Mac") } }
+    // Plain assignment, as typing does: FleetView.list animates on store.query itself.
+    filmstrip("search", start: [], query: "") { store.query = "99" }
 }
 exit(0)

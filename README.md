@@ -2,32 +2,48 @@
 
 A native macOS menubar app for controlling a personal fleet of LLM servers
 across multiple machines: local launchd services, Linux laptops over ssh
-(systemd), and NAS docker compose stacks. One dropdown, three hosts, every
-model start/stop/restart from one place.
+(systemd), and NAS docker compose stacks. Click the bird and one window shows
+every host and every model, with start/stop/restart in place.
 
-![menu](docs/menu.png)
+![window](docs/window.png)
 
 Part of the [hummin](https://github.com/rennf93/hummin) family. MIT licensed,
-zero dependencies, builds with the Swift toolchain alone.
+zero dependencies, builds with the Swift toolchain alone. The window design is
+specified in [DESIGN.md](DESIGN.md).
 
 ## Features
 
-- Nested host submenus (Mac, Laptop, NAS - or whatever you define), each row
-  with Start / Stop / Restart and live state dots (running / stopped / in
-  flight), with per-host running counts in the root menu
+- One window, opened from the menubar bird. Left click toggles it; right
+  click offers Open, Refresh All and Quit. No Dock icon
+- Host cards (Mac, Laptop, NAS - or whatever you define) that expand and
+  collapse and remember their state, each with a running count. Every server
+  row shows a state dot plus a word (running, stopped, starting..., no
+  response), its port and mode, and only the actions that apply right now
+- Crafted controls and motion: icon buttons that press and spring back,
+  hover fills, a flipping chevron tile, and cards that grow and fade their
+  rows in (expand, collapse and search filtering all animate). Reduce Motion
+  turns the movement off and keeps short fades
+- A filter field (Cmd-F) that searches label, id, host and port across the
+  whole fleet; Cmd-R refreshes; Esc clears the filter, then closes
+- Failures stay visible: a failed or timed-out action shows on its row with a
+  Show Log button, instead of only in the log file
 - Config-driven: servers live in a personal `servers.json`, not in code. Adding
   a model or a machine never means recompiling
 - Mutex groups for servers that share a resource: starting one stops the
-  others (e.g. several models, one small GPU)
+  others (e.g. several models, one small GPU); the Start button names them
 - Optional mode switcher per server for anything driven by a mode file
   (included: a replay-trim proxy mode with instant `all / strip / off`
   switching)
-- Non-blocking health checks: the menu renders instantly from a cache and
-  refreshes in the background; checks run concurrently with a timeout, so an
-  asleep laptop never stalls the menu
+- Health checks run only while the window is visible (plus once at launch),
+  concurrently and bounded by timeouts, so an asleep laptop never stalls
+  anything and nothing polls in the background
 - Actions and health probes are logged to `~/Library/Logs/hummin-menubar-*.log`
+  (`HUMMIN_MENUBAR_LOGS` points them elsewhere; the tests and the preview
+  script use it so they never touch the real logs)
 
 ## Build
+
+Requires macOS 14 or later (the window uses SwiftUI Observation).
 
 ```bash
 swift build -c release
@@ -63,8 +79,12 @@ Config search order: `$HUMMIN_MENUBAR_CONFIG`, then
 .build/release/HumminMenubar
 ```
 
-For always-on use, a LaunchAgent is the usual setup. Example plist (adjust
-paths, then `launchctl bootstrap gui/501 <plist>`):
+For always-on use, a LaunchAgent is the usual setup. `make install` copies the
+build to `~/colibri/bin` and reloads the agent with `bootout` + `bootstrap`
+(not `kickstart`: macOS pins a LaunchAgent to its binary's code identity, and
+restarting it on a new binary is killed with "Launch Constraint Violation"
+until the agent is re-registered). Example plist (adjust paths, then
+`launchctl bootstrap gui/501 <plist>`):
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>

@@ -64,10 +64,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         w.title = "Hummin"
         w.toolbarStyle = .unified
         w.isReleasedWhenClosed = false
-        w.setContentSize(NSSize(width: 560, height: 700))
-        w.contentMinSize = NSSize(width: 460, height: 420)
+        w.setContentSize(NSSize(width: 1100, height: 760))
+        w.contentMinSize = NSSize(width: 920, height: 520)
         w.center()
-        w.setFrameAutosaveName("HumminFleetWindow")
+        // new autosave name: the 2-column grid needs a wider frame than the old saved one
+        w.setFrameAutosaveName("HumminFleetWindowGrid")
         w.delegate = self
         return w
     }

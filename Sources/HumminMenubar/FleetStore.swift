@@ -28,6 +28,9 @@ final class FleetStore {
     private(set) var lastResult: [String: ActionResult] = [:]
     private(set) var lastCheck: Date?
     private(set) var checking = false
+    // server id -> true while its post-start warm-up (health poll + one-token
+    // "Hi") runs; the row shows "warming" and Stop cancels it.
+    private(set) var warming: [String: Bool] = [:]
     var query = ""
     var expandedHosts: Set<String> {
         didSet { UserDefaults.standard.set(Array(expandedHosts).sorted(), forKey: "expandedHosts") }
@@ -36,6 +39,7 @@ final class FleetStore {
     @ObservationIgnored private let runner: CommandRunner
     @ObservationIgnored private var recheck = false
     @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var warmTasks: [String: Task<Void, Never>] = [:]
     private static let checkTTL: TimeInterval = 5
 
     init(servers: [Server], hostOrder: [String], configPath: String?, configError: String?, runner: CommandRunner) {
@@ -129,10 +133,59 @@ final class FleetStore {
                 MainActor.assumeIsolated {
                     self.lastResult[server.id] = ActionResult(action: action, exitCode: r.exit, finishedAt: Date())
                     self.pending[server.id] = nil
+                    if r.exit == 0, action == .start || action == .restart, server.warm == true {
+                        self.beginWarmup(server)
+                    }
+                    if action == .stop { self.cancelWarmup(server) }
                     self.refresh(force: true)
                 }
             }
         }
+    }
+
+    // ---- warm-up -------------------------------------------------------------------
+
+    // After a Start/Restart on a warm-flagged row: poll /health until the
+    // server listens, then send a one-token "Hi". That first inference is what
+    // pages lazy-mmap weights in, so the user's first real prompt skips the
+    // multi-minute (or multi-hour, on a cold network mount) load.
+    func beginWarmup(_ server: Server) {
+        warmTasks[server.id]?.cancel()
+        guard let hostIp = server.hostIp, let port = server.port else {
+            Self.logAction("\(server.id) warm skipped: no hostIp/port in config")
+            return
+        }
+        let base = "http://\(hostIp):\(port)"
+        var bearer: String?
+        if let keyFile = server.warmKeyFile {
+            bearer = try? String(contentsOfFile: keyFile, encoding: .utf8)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        warming[server.id] = true
+        let id = server.id
+        let task = Task { [weak self] in
+            defer { Task { @MainActor in
+                self?.warming[id] = nil
+                self?.warmTasks[id] = nil
+                self?.refresh(force: true)
+            } }
+            let ready = await Warmer.waitUntilHealthy(base: base, bearer: bearer,
+                                                       deadline: Date().addingTimeInterval(1800))
+            guard !Task.isCancelled else { return }
+            if ready {
+                let status = await Warmer.sayHi(base: base, bearer: bearer)
+                Self.logAction("\(id) warm exit=\(status)")
+            } else {
+                Self.logAction("\(id) warm abandoned: /health never came up in 30 min")
+            }
+        }
+        warmTasks[server.id] = task
+    }
+
+    func cancelWarmup(_ server: Server) {
+        warmTasks[server.id]?.cancel()
+        warmTasks[server.id] = nil
+        warming[server.id] = nil
     }
 
     func setMode(_ mode: String, on server: Server) {
@@ -157,5 +210,49 @@ final class FleetStore {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
         Process.appendToLog(Config.logsDirectory + "/hummin-menubar-actions.log", "[\(f.string(from: Date()))] \(line)\n")
+    }
+}
+
+// Minimal HTTP helpers for warm-up: URLSession only, no shell, cancellable via
+// the Task. Health polls are cheap 4s requests; the "Hi" completion may run for
+// minutes on a cold lazy-mmap server, so its resource timeout is generous.
+enum Warmer {
+    static func waitUntilHealthy(base: String, bearer: String?, deadline: Date) async -> Bool {
+        while Date() < deadline {
+            if Task.isCancelled { return false }
+            let status = await status(for: request(base + "/health", bearer: bearer, method: "GET"), idleTimeout: 4)
+            if status == 200 { return true }
+            try? await Task.sleep(nanoseconds: 3_000_000_000)
+        }
+        return false
+    }
+
+    static func sayHi(base: String, bearer: String?) async -> Int {
+        let body: [String: Any] = ["messages": [["role": "user", "content": "Hi"]], "max_tokens": 1]
+        guard let data = try? JSONSerialization.data(withJSONObject: body) else { return -1 }
+        var request = request(base + "/v1/chat/completions", bearer: bearer, method: "POST")
+        request.httpBody = data
+        return await status(for: request, idleTimeout: 3600, resourceTimeout: 3600)
+    }
+
+    private static func request(_ url: String, bearer: String?, method: String) -> URLRequest {
+        var request = URLRequest(url: URL(string: url)!)
+        request.httpMethod = method
+        if let bearer { request.setValue("Bearer \(bearer)", forHTTPHeaderField: "Authorization") }
+        return request
+    }
+
+    private static func status(for request: URLRequest, idleTimeout: TimeInterval, resourceTimeout: TimeInterval? = nil) async -> Int {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = idleTimeout
+        if let resourceTimeout { config.timeoutIntervalForResource = resourceTimeout }
+        let session = URLSession(configuration: config)
+        defer { session.finishTasksAndInvalidate() }
+        do {
+            let (_, response) = try await session.data(for: request)
+            return (response as? HTTPURLResponse)?.statusCode ?? -1
+        } catch {
+            return -1
+        }
     }
 }

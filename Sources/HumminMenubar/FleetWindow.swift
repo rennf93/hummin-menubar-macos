@@ -65,7 +65,7 @@ struct FleetView: View {
             Divider()
             footer
         }
-        .frame(minWidth: 460, minHeight: 420)
+        .frame(minWidth: 920, minHeight: 520)
         .background(shortcuts)
     }
 
@@ -128,10 +128,13 @@ struct FleetView: View {
             return (all.isEmpty || shown.isEmpty) ? nil : (host, all, shown)
         }
         return ScrollView {
-            VStack(spacing: 12) {
+            // 2x2 host grid: row-major order follows hostOrder (Mac | Laptop // NAS | Rennberry);
+            // cells top-align so a collapsed card never drifts below its expanded row-mate
+            LazyVGrid(columns: [GridItem(.flexible(), spacing: 12, alignment: .top), GridItem(.flexible(), spacing: 12, alignment: .top)], spacing: 12) {
                 if searching && cards.isEmpty {
                     Text("No servers match \u{201C}\(store.query)\u{201D}")
                         .foregroundStyle(.secondary).padding(.top, 40)
+                        .gridCellColumns(2)
                 }
                 ForEach(cards, id: \.host) { card in
                     HostCard(store: store, host: card.host, all: card.all, shown: card.shown, forceExpanded: searching)
@@ -263,7 +266,9 @@ private struct ServerRow: View {
         let mode = store.modes[server.id]
         let siblings = mutexSiblings(of: server, in: store.servers)
         let also = siblings.isEmpty ? "" : "Also stops: " + siblings.map(\.label).joined(separator: ", ")
-        let caption = [server.port.map { ":\($0)" }, state.stateWord, mode].compactMap { $0 }.joined(separator: " \u{00B7} ")
+        let warming = store.warming[server.id] == true
+        let caption = [server.port.map { ":\($0)" }, state.stateWord, mode, warming ? "warming" : nil]
+            .compactMap { $0 }.joined(separator: " \u{00B7} ")
 
         HStack(spacing: 10) {
             StateDot(phase: state.phase)

@@ -18,13 +18,23 @@ public struct Server: Codable, Hashable, Sendable {
     public var modes: [String]?
     public var modeGet: String?
     public var modeSet: String?
+    // Optional post-start warm-up: when warm is set, the store polls /health
+    // until the server is listening, then sends a one-token "Hi" so lazy-mmap
+    // weights page in while the user is not waiting on their first real prompt.
+    // hostIp:port is the HTTP base (ssh-started remote rows have no other
+    // address); warmKeyFile points at a bearer-token file for keyed servers.
+    public var warm: Bool?
+    public var hostIp: String?
+    public var warmKeyFile: String?
 
     public init(id: String, label: String, host: String, port: UInt16? = nil, up: String = "", down: String = "",
                 health: String = "", mutexGroup: String? = nil, modes: [String]? = nil,
-                modeGet: String? = nil, modeSet: String? = nil) {
+                modeGet: String? = nil, modeSet: String? = nil,
+                warm: Bool? = nil, hostIp: String? = nil, warmKeyFile: String? = nil) {
         self.id = id; self.label = label; self.host = host; self.port = port
         self.up = up; self.down = down; self.health = health; self.mutexGroup = mutexGroup
         self.modes = modes; self.modeGet = modeGet; self.modeSet = modeSet
+        self.warm = warm; self.hostIp = hostIp; self.warmKeyFile = warmKeyFile
     }
 }
 

@@ -28,9 +28,11 @@ final class FleetStore {
     private(set) var lastResult: [String: ActionResult] = [:]
     private(set) var lastCheck: Date?
     private(set) var checking = false
-    // server id -> true while its post-start warm-up (health poll + one-token
-    // "Hi") runs; the row shows "warming" and Stop cancels it.
-    private(set) var warming: [String: Bool] = [:]
+    // Warm state per warm-flagged server id: "warming-up" while the post-start
+    // warmer (health poll + one-token "Hi") runs, "warm" once the "Hi" landed.
+    // Anything else displays as "cold" - derived in the view, so rows started
+    // before the menubar (or externally) show cold instead of a stale warm.
+    private(set) var warmState: [String: String] = [:]
     var query = ""
     var expandedHosts: Set<String> {
         didSet { UserDefaults.standard.set(Array(expandedHosts).sorted(), forKey: "expandedHosts") }
@@ -39,6 +41,7 @@ final class FleetStore {
     @ObservationIgnored private let runner: CommandRunner
     @ObservationIgnored private var recheck = false
     @ObservationIgnored private var timer: Timer?
+    @ObservationIgnored private var warmTried: Set<String> = []
     @ObservationIgnored private var warmTasks: [String: Task<Void, Never>] = [:]
     private static let checkTTL: TimeInterval = 5
 
@@ -95,6 +98,20 @@ final class FleetStore {
                     self.modes = modes
                     self.lastCheck = Date()
                     self.checking = false
+                    // a warm server that went down is cold again
+                    for server in self.servers where server.warm == true && up[server.id] == false {
+                        self.warmState[server.id] = nil
+                        self.warmTried.remove(server.id)
+                    }
+                    // Adopt warm rows that are up but were not started here
+                    // (external, or before the menubar): one cheap "Hi" tells
+                    // their real warmth instead of "cold" forever. Once per up-period.
+                    for server in self.servers where server.warm == true && up[server.id] == true
+                        && self.warmState[server.id] == nil && self.warmTasks[server.id] == nil
+                        && self.pending[server.id] == nil && !self.warmTried.contains(server.id) {
+                        self.warmTried.insert(server.id)
+                        self.beginWarmup(server)
+                    }
                     if self.recheck { self.recheck = false; self.refresh(force: true) }
                 }
             }
@@ -137,6 +154,7 @@ final class FleetStore {
                         self.beginWarmup(server)
                     }
                     if action == .stop { self.cancelWarmup(server) }
+                    if action == .stop, server.warm == true { self.warmState[server.id] = nil }
                     self.refresh(force: true)
                 }
             }
@@ -158,14 +176,13 @@ final class FleetStore {
         let base = "http://\(hostIp):\(port)"
         var bearer: String?
         if let keyFile = server.warmKeyFile {
-            bearer = try? String(contentsOfFile: keyFile, encoding: .utf8)
+            bearer = try? String(contentsOfFile: (keyFile as NSString).expandingTildeInPath, encoding: .utf8)
                 .trimmingCharacters(in: .whitespacesAndNewlines)
         }
-        warming[server.id] = true
+        warmState[server.id] = "warming-up"
         let id = server.id
         let task = Task { [weak self] in
             defer { Task { @MainActor in
-                self?.warming[id] = nil
                 self?.warmTasks[id] = nil
                 self?.refresh(force: true)
             } }
@@ -174,8 +191,10 @@ final class FleetStore {
             guard !Task.isCancelled else { return }
             if ready {
                 let status = await Warmer.sayHi(base: base, bearer: bearer)
+                await MainActor.run { self?.warmState[id] = status == 200 ? "warm" : nil }
                 Self.logAction("\(id) warm exit=\(status)")
             } else {
+                await MainActor.run { self?.warmState[id] = nil }
                 Self.logAction("\(id) warm abandoned: /health never came up in 30 min")
             }
         }
@@ -185,7 +204,7 @@ final class FleetStore {
     func cancelWarmup(_ server: Server) {
         warmTasks[server.id]?.cancel()
         warmTasks[server.id] = nil
-        warming[server.id] = nil
+        warmState[server.id] = nil
     }
 
     func setMode(_ mode: String, on server: Server) {

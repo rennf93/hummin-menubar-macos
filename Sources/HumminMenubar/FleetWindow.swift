@@ -266,8 +266,18 @@ private struct ServerRow: View {
         let mode = store.modes[server.id]
         let siblings = mutexSiblings(of: server, in: store.servers)
         let also = siblings.isEmpty ? "" : "Also stops: " + siblings.map(\.label).joined(separator: ", ")
-        let warming = store.warming[server.id] == true
-        let caption = [server.port.map { ":\($0)" }, state.stateWord, mode, warming ? "warming" : nil]
+        // Warm rows always surface their warm state: cold (default - covers
+        // externally started or pre-feature servers), warming-up, warm. Hidden
+        // only while a start/stop action is pending, when the state word
+        // already says "Starting"/"Stopping".
+        let warmLabel: String? = {
+            guard server.warm == true else { return nil }
+            if store.pending[server.id] != nil { return nil }
+            if store.warmState[server.id] == "warming-up" { return "warming up" }
+            if store.warmState[server.id] == "warm" { return "warm" }
+            return "cold"
+        }()
+        let caption = [server.port.map { ":\($0)" }, state.stateWord, mode, warmLabel]
             .compactMap { $0 }.joined(separator: " \u{00B7} ")
 
         HStack(spacing: 10) {

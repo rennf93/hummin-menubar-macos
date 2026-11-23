@@ -193,7 +193,10 @@ final class FleetStore {
                                                        deadline: Date().addingTimeInterval(1800))
             guard !Task.isCancelled else { return }
             if ready {
-                let status = await Warmer.sayHi(base: base, bearer: bearer)
+                // a server already working on a prompt has its weights paged in, and a "Hi"
+                // would only queue behind that work (minutes to hours on a big CPU-MoE model)
+                let busy = await Warmer.isBusy(base: base, bearer: bearer)
+                let status = busy ? 200 : await Warmer.sayHi(base: base, bearer: bearer)
                 await MainActor.run { self?.warmState[id] = status == 200 ? "warm" : nil }
                 Self.logAction("\(id) warm exit=\(status)")
             } else {
@@ -247,6 +250,18 @@ enum Warmer {
             try? await Task.sleep(nanoseconds: 3_000_000_000)
         }
         return false
+    }
+
+    // llama-server GET /slots: any slot with is_processing means it is mid-request
+    static func isBusy(base: String, bearer: String?) async -> Bool {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 5
+        let session = URLSession(configuration: config)
+        defer { session.finishTasksAndInvalidate() }
+        guard let (data, response) = try? await session.data(for: request(base + "/slots", bearer: bearer, method: "GET")),
+              (response as? HTTPURLResponse)?.statusCode == 200,
+              let slots = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { return false }
+        return slots.contains { ($0["is_processing"] as? Bool) == true }
     }
 
     static func sayHi(base: String, bearer: String?) async -> Int {

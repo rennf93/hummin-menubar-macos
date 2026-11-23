@@ -273,6 +273,7 @@ private struct ServerRow: View {
         let warmLabel: String? = {
             guard server.warm == true else { return nil }
             if store.pending[server.id] != nil { return nil }
+            if store.up[server.id] != true { return nil }
             if store.warmState[server.id] == "warming-up" { return "warming up" }
             if store.warmState[server.id] == "warm" { return "warm" }
             return "cold"

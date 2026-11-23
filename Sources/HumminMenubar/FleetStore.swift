@@ -83,7 +83,10 @@ final class FleetStore {
                     queue.async {
                         let r = runner.run(modeGet, timeout: 5)
                         if r.exit == 0 {
+                            // stderr is merged into the output (ssh warnings): the mode is the last line
                             let mode = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
+                                .split(whereSeparator: \.isNewline).last.map(String.init)?
+                                .trimmingCharacters(in: .whitespaces) ?? ""
                             lock.lock(); modeResults[server.id] = mode; lock.unlock()
                         }
                         group.leave()
